@@ -1,0 +1,19 @@
+# Core LangChain + Groq + HuggingFace + FAISS
+langchain==0.3.26
+langchain-core==0.3.68
+langchain-community==0.3.27
+langchain-huggingface==0.3.0
+langchain-groq==0.3.5
+
+# Vector DB + Embeddings
+sentence-transformers==5.0.0
+faiss-cpu==1.11.0
+
+# Utilities
+python-dotenv==1.0.1
+
+# Streamlit for create.py
+streamlit==1.46.1
+
+# PDF Loading
+PyMuPDF==1.24.2  # or pymupdf
