@@ -2,10 +2,10 @@ from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain.agents import initialize_agent, Tool
 from langchain.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
-from langchain_core.runnables import RunnableSequence
 import os
 from dotenv import load_dotenv
 
@@ -18,117 +18,150 @@ DATA_PATH = "data/"
 DB_FAISS_PATH = "vectorstore/db_faiss"
 
 
-def load_pdf_files(data):
-    loader = DirectoryLoader(data, glob='*.pdf', loader_cls=PyPDFLoader)
-    documents = loader.load()
-    return documents
-
-def create_chunks(extracted_data):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    text_chunks = text_splitter.split_documents(extracted_data)
-    return text_chunks
-
-
 def get_embedding_model():
-    embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    return embedding_model
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
+def load_pdf_files(path):
+    loader = DirectoryLoader(path, glob='*.pdf', loader_cls=PyPDFLoader)
+    return loader.load()
+
+def create_chunks(documents):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    return splitter.split_documents(documents)
+
+# --- Build or Load Vectorstore ---
 def build_vector_db(chunks):
-    embedding_model = get_embedding_model()
-    db = FAISS.from_documents(chunks, embedding_model)
+    embeddings = get_embedding_model()
+    db = FAISS.from_documents(chunks, embeddings)
     db.save_local(DB_FAISS_PATH)
-    return db
+
+def load_vector_db():
+    embeddings = get_embedding_model()
+    return FAISS.load_local(DB_FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
 
 
 def load_llm():
-    llm = ChatGroq(
-        model_name="llama3-8b-8192",
-        temperature=0.2,
-        groq_api_key=GROQ_API_KEY
-    )
-    return llm
+    return ChatGroq(model_name="llama3-8b-8192", temperature=0.2, groq_api_key=GROQ_API_KEY)
 
 
 CUSTOM_PROMPT_TEMPLATE = """
 Use the pieces of information provided in the context to answer user's question.
-If you don’t know the answer, just say that you don’t know. Don’t make up anything.
-Only use the given context.
+If you don’t know the answer, say "This information is not available in the provided context."
 
 Context: {context}
 Question: {question}
 
-Start your answer directly.
+Start your answer directly:
 """
 
-QUERY_REPHRASE_PROMPT = PromptTemplate.from_template("""
-You are an intelligent assistant. Reformulate the following user question into a clearer, more specific query that can be used for information retrieval.
+
+def create_qa_tool(llm, retriever):
+    prompt = PromptTemplate(
+        input_variables=["context", "question"],
+        template=CUSTOM_PROMPT_TEMPLATE
+    )
+
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",
+        retriever=retriever,
+        return_source_documents=False,
+        chain_type_kwargs={"prompt": prompt}
+    )
+
+    def qa_func(inputs):
+        response = qa_chain.invoke(inputs)
+        answer = response.get("result", "").strip()
+        if not answer or "i don't know" in answer.lower():
+            return "This information is not available in the provided context."
+        return answer
+
+    return Tool(
+        name="rag_tool",
+        func=qa_func,
+        description="Use this tool to answer user questions based on the uploaded PDFs."
+    )
+
+
+def create_rephrase_tool(llm):
+    prompt = PromptTemplate(
+        input_variables=["question"],
+        template="""You are an intelligent assistant. Reformulate the following user question into a clearer, more specific query.
 
 Original Question: {question}
-Improved Question:
-""")
+Improved Question:"""
+    )
 
-CRITIC_PROMPT = PromptTemplate.from_template("""
-Evaluate the following answer with respect to the context and question. Mention if the answer is fully grounded in the context or not.
+    chain = prompt | llm
+
+    def rephrase_func(inputs):
+        return chain.invoke({"question": inputs}).content.strip()
+
+    return Tool(
+        name="rephrase_tool",
+        func=rephrase_func,
+        description="Use this tool to improve ambiguous or unclear questions."
+    )
+
+
+def create_critic_tool(llm):
+    prompt = PromptTemplate(
+        input_variables=["context", "question", "answer"],
+        template="""
+Evaluate the following answer with respect to the context and question.
+Mention if the answer is fully grounded in the context or not.
 
 Context: {context}
 Question: {question}
 Answer: {answer}
 
-Evaluation:
-""")
+Evaluation:"""
+    )
 
-def set_custom_prompt(template):
-    return PromptTemplate(template=template, input_variables=["context", "question"])
+    chain = prompt | llm
 
+    def critic_func(inputs):
+        if not isinstance(inputs, dict) or not all(k in inputs for k in ["context", "question", "answer"]):
+            return "Critic tool requires context, question, and answer. The input format was incorrect."
+        return chain.invoke(inputs).content.strip()
 
-embedding_model = get_embedding_model()
-db = FAISS.load_local(DB_FAISS_PATH, embedding_model, allow_dangerous_deserialization=True)
-retriever = db.as_retriever(search_kwargs={"k": 3})
-
-
-llm = load_llm()
-rephrase_chain = QUERY_REPHRASE_PROMPT | llm
-critic_chain = CRITIC_PROMPT | llm
-
-qa_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    chain_type="stuff",
-    retriever=retriever,
-    return_source_documents=True,
-    chain_type_kwargs={"prompt": set_custom_prompt(CUSTOM_PROMPT_TEMPLATE)}
-)
+    return Tool(
+        name="critic_tool",
+        func=critic_func,
+        description="Use this tool to check if the answer is grounded in the retrieved context."
+    )
 
 
-def agentic_query_handler(user_query, max_retries=2):
-    attempts = 0
-    query = user_query
-    while attempts < max_retries:
-        improved_query = rephrase_chain.invoke({"question": query}).content
+def initialize_agentic_rag(llm, retriever):
+    tools = [
+        create_qa_tool(llm, retriever),
+        create_rephrase_tool(llm),
+        create_critic_tool(llm)
+    ]
+    return initialize_agent(
+        tools=tools,
+        llm=llm,
+        agent="chat-zero-shot-react-description",
+        verbose=True
+    )
 
-        response = qa_chain.invoke({"query": improved_query})
-        answer = response["result"]
-        context = "\n\n".join([doc.page_content for doc in response["source_documents"]])
-
-        evaluation = critic_chain.invoke({
-            "context": context,
-            "question": user_query,
-            "answer": answer
-        }).content
-
-        if "grounded" in evaluation.lower() and "yes" in evaluation.lower():
-            return answer
-        else:
-            query = improved_query
-            attempts += 1
-
-    return answer
-
-# Step 8: Run
 if __name__ == "__main__":
-    documents = load_pdf_files(DATA_PATH)
-    text_chunks = create_chunks(documents)
-    build_vector_db(text_chunks)
+    if not os.path.exists(DB_FAISS_PATH):
+        print("Building vector DB...")
+        docs = load_pdf_files(DATA_PATH)
+        chunks = create_chunks(docs)
+        build_vector_db(chunks)
+        print("Vector DB built successfully.")
 
-    user_query = input("Your question: ")
-    final_answer = agentic_query_handler(user_query=user_query)
-    print(final_answer)
+    db = load_vector_db()
+    retriever = db.as_retriever(search_kwargs={"k": 3})
+    llm = load_llm()
+
+    agent = initialize_agentic_rag(llm, retriever)
+
+    while True:
+        user_input = input("\nAsk a question (or type 'exit'): ")
+        if user_input.lower() == "exit":
+            break
+        result = agent.invoke({"input": user_input})["output"]
+        print("\nAnswer:", result)
