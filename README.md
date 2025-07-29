@@ -1,83 +1,86 @@
+#  Agentic RAG: Smart PDF-Based Question Answering System with LangChain Agents
 
-# Agentic RAG: Intelligent PDF-Based Question Answering System
-
-This project is an advanced version of traditional Retrieval-Augmented Generation (RAG), now upgraded to **Agentic RAG**. It is designed to read PDF files (such as lecture slides), understand their content, and intelligently answer user questions.
-
-Instead of just retrieving data based on a fixed query, the system **thinks**, **improves the question**, and **evaluates the answer** — just like a smart assistant.
+This project is an enhanced version of traditional **Retrieval-Augmented Generation (RAG)**, upgraded to **Agentic RAG** using **LangChain Agents**.  
+It can read PDF files (e.g. lecture slides), understand them, and intelligently answer user questions using multiple tools — just like a thinking assistant.
 
 ---
 
-## What This Project Does
+##  What’s New in Agentic RAG?
 
-- Reads PDFs from the `data/` folder.
-- Splits the content into small chunks for better understanding.
-- Converts each chunk into vector embeddings using HuggingFace model.
-- Stores these vectors in a FAISS vector database.
-- When a question is asked:
-  1. The system improves the question automatically.
-  2. It searches for the most relevant data.
-  3. Answers using the LLaMA 3 model via Groq.
-  4. Checks if the answer is correct and well-grounded.
-  5. If not, it retries with a better version of the question.
+Unlike traditional RAG systems that simply retrieve and answer, **Agentic RAG adds reasoning, flexibility, and feedback**.  
+An **LLM-powered agent** decides what tool to use based on your input.
 
----
+###  Tools used by the Agent:
 
-## Technologies Used
+1. **RAG Tool**  
+   Retrieves relevant chunks from the PDFs and answers questions.
 
-- **LangChain** — for chaining all AI steps
-- **Groq + LLaMA 3** — for fast and accurate answers
-- **HuggingFace Embeddings** — for converting text into vectors
-- **FAISS** — for vector search
-- **Python + dotenv** — for scripting and secure key storage
+2. **Rephrase Tool**  
+   Automatically improves vague or unclear questions before searching.
+
+3. **Critic Tool**  
+   Checks if the answer is based on the actual document or not.
+
+All tools are controlled by a single **LangChain Agent** using the `chat-zero-shot-react-description` strategy.
 
 ---
 
-## 📁 Project Structure
+##  Technologies Used
+
+- **LangChain Agents** – for decision-making and multi-step execution  
+- **Groq + llama3-8b-8192** – for ultra-fast and accurate LLM responses  
+- **HuggingFace Embeddings** – for converting text into vector format  
+- **FAISS** – for efficient vector-based document search  
+- **Python + dotenv** – for logic and key management
+
+---
+
+##  Folder Structure
 
 ```
-RAG_Project/
-├── data/               # Put your PDF slides here
-├── vectorstore/        # Vector DB is stored here
-├── create.py           # Script to load PDFs and create vector DB
-├── connect.py          # Main script that handles the Agentic QA
-├── .env                # Store your GROQ_API_KEY here
-└── README.md           # Project description
+Agentic_RAG_Project/
+├── data/               # Add your PDFs here
+├── vectorstore/        # Vector DB created here
+├── create.py           # Runs once to create vector DB
+├── connect.py          # Main Agentic RAG script
+├── .env                # Store API keys (not pushed to GitHub)
+└── README.md           # Project overview
 ```
 
 ---
 
-## ⚙️ How To Run
+##  How to Run the Project
 
-1. Put your PDF files in the `data/` folder.
-2. Add your Groq API key in `.env` file:
+1. Place your PDF documents in the `data/` folder.
+
+2. Add your API key to a `.env` file:
    ```
-   GROQ_API_KEY=your_key_here
+   GROQ_API_KEY=your_groq_key_here
    ```
-3. Run `create.py` to prepare the database:
+
+3. Create the vector database:
    ```bash
    python create.py
    ```
-4. Run `connect.py` to ask questions:
+
+4. Start the agent:
    ```bash
    python connect.py
    ```
 
+Then just type your question and watch the agent decide what steps to take!
+
 ---
 
-## Example
+##  Example Interaction
 
 ```
-Your question: explain OS
-Final Output: An operating system (OS) is software that acts as a bridge between the user and hardware...
+You: what is os
+Agent uses Rephrase Tool → Improved Question: "Explain what an operating system is."
+Agent uses RAG Tool → Finds answer from PDF
+Agent uses Critic Tool → Confirms answer is correct
+
+Final Answer: An operating system (OS) is software that acts as a bridge between the user and hardware...
 ```
 
 ---
-
-## Learning Reference
-
-I mainly learned Agentic RAG from this article:  
-🔗 [https://www.datacamp.com/blog/agentic-rag](https://www.datacamp.com/blog/agentic-rag)  
-I also explored a few more blogs and tutorials to understand how agents and feedback loops work with RAG.
-
----
-
